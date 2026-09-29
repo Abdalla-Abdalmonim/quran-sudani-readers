@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { BookOpen, Bookmark, ChevronLeft, Headphones, Heart, Menu, Moon, Pause, Play, Search, Sun, X } from 'lucide-react'
-import { readers, surahs, verses } from './data'
+import { readers, surahs } from './data'
 
 const STORAGE_KEY = 'quraa-sudan-bookmarks'
 
@@ -18,6 +18,8 @@ function App() {
   })
   const [isDark, setIsDark] = useState(() => localStorage.getItem('quraa-sudan-dark') === 'true')
   const [isPlaying, setIsPlaying] = useState(false)
+  const [isLoading, setIsLoading] = useState(false)
+  const [ayahs, setAyahs] = useState([])
   const [mobileMenu, setMobileMenu] = useState(false)
   const audioRef = useRef(null)
 
@@ -30,23 +32,54 @@ function App() {
     localStorage.setItem('quraa-sudan-dark', String(isDark))
   }, [isDark])
 
+  useEffect(() => {
+    let ignore = false
+    setIsLoading(true)
+    fetch(`https://api.alquran.cloud/v1/surah/${selectedSurah.id}`)
+      .then((response) => {
+        if (!response.ok) throw new Error('Failed to load surah')
+        return response.json()
+      })
+      .then((json) => {
+        if (!ignore) {
+          setAyahs(json?.data?.ayahs || [])
+        }
+      })
+      .catch(() => {
+        if (!ignore) setAyahs([])
+      })
+      .finally(() => {
+        if (!ignore) setIsLoading(false)
+      })
+    return () => {
+      ignore = true
+    }
+  }, [selectedSurah.id])
+
+  useEffect(() => {
+    if (!audioRef.current) return
+    audioRef.current.pause()
+    setIsPlaying(false)
+  }, [selectedSurah.id, selectedReader.id])
+
   const filteredSurahs = useMemo(() => {
     const value = query.trim()
     if (!value) return surahs
     return surahs.filter((surah) => surah.name.includes(value) || String(surah.id) === value)
   }, [query])
 
-  const currentVerses = verses[selectedSurah.id] || verses[1]
+  const currentVerses = ayahs.length > 0 ? ayahs : []
 
-  const isBookmarked = (ayah) => bookmarks.some((item) => item.surahId === selectedSurah.id && item.ayah === ayah)
+  const isBookmarked = (ayahNum) => bookmarks.some(
+    (item) => item.surahId === selectedSurah.id && item.ayahNum === ayahNum,
+  )
 
-  const toggleBookmark = (ayah) => {
+  const toggleBookmark = (ayahNum, ayahText) => {
     setBookmarks((current) => {
-      const exists = current.some((item) => item.surahId === selectedSurah.id && item.ayah === ayah)
-      if (exists) {
-        return current.filter((item) => !(item.surahId === selectedSurah.id && item.ayah === ayah))
-      }
-      return [...current, { surahId: selectedSurah.id, surah: selectedSurah.name, ayah }]
+      const exists = current.some((item) => item.surahId === selectedSurah.id && item.ayahNum === ayahNum)
+      return exists
+        ? current.filter((item) => !(item.surahId === selectedSurah.id && item.ayahNum === ayahNum))
+        : [...current, { surahId: selectedSurah.id, surah: selectedSurah.name, ayahNum, ayahText }]
     })
   }
 
@@ -56,15 +89,33 @@ function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  const play = () => {
-    if (!selectedReader.audioUrl) return
-    if (audioRef.current) {
-      if (audioRef.current.paused) {
-        audioRef.current.play().then(() => setIsPlaying(true)).catch(() => setIsPlaying(false))
-      } else {
-        audioRef.current.pause()
-        setIsPlaying(false)
-      }
+  const buildAudioUrl = () => {
+    const base = selectedReader?.audioBase?.replace(/\/$/, '')
+    if (!base) return ''
+    return `${base}/${String(selectedSurah.id).padStart(3, '0')}.mp3`
+  }
+
+  const play = async () => {
+    const url = buildAudioUrl()
+    if (!url || !audioRef.current) return
+    if (audioRef.current.src !== url) {
+      audioRef.current.src = url
+    }
+    try {
+      await audioRef.current.play()
+      setIsPlaying(true)
+    } catch {
+      setIsPlaying(false)
+    }
+  }
+
+  const togglePlayback = () => {
+    if (!audioRef.current) return
+    if (audioRef.current.paused) {
+      play()
+    } else {
+      audioRef.current.pause()
+      setIsPlaying(false)
     }
   }
 
@@ -92,17 +143,16 @@ function App() {
             <div className="hero-copy">
               <span className="eyebrow"><span className="pulse" /> تلاوة • تدبر • سكينة</span>
               <h1>استمع إلى القرآن الكريم <em>بأصوات سودانية</em></h1>
-              <p>منصة عربية بسيطة تجمع محبي القرآن مع أصوات القراء السودانيين، لتعيش لحظات من الخشوع أينما كنت.</p>
+              <p>منصة عربية تتيح لك قراءة القرآن الكريم واستماع جميع الآيات مع أصوات القراء المشهورين.</p>
               <div className="hero-actions">
                 <button className="button primary" onClick={() => setActiveTab('read')}><BookOpen size={18} /> ابدأ القراءة</button>
                 <button className="button soft" onClick={() => setActiveTab('readers')}><Headphones size={18} /> استكشف القراء</button>
               </div>
-              <div className="trust"><span>١١٤</span> سورة <i /> <span>١٠٠٪</span> مجاني <i /> <span>٦</span> قراء</div>
+              <div className="trust"><span>١١٤</span> سورة <i /> <span>كل الآيات</span> <i /> <span>٦ قراء</span></div>
             </div>
-
             <div className="hero-art">
               <div className="ornament">۞</div>
-              <div className="hero-quote">وَرَتِّلِ الْقُرْآنَ تَرْتِيلًا<small>المزمل: ٤</small></div>
+              <div className="hero-quote">وَرَتِّلِ الْقُرْآنَ تَرْتِيلًا<small>المزمل: ٤</small></div>
               <div className="hero-badge">
                 <Headphones size={18} />
                 <span><b>استمع الآن</b><small>تلاوة هادئة للقلب</small></span>
@@ -165,15 +215,21 @@ function App() {
                 <div className="basmala">بِسْمِ اللَّهِ الرَّحْمَنِ الرَّحِيمِ</div>
 
                 <div className="ayah-list">
-                  {currentVerses.map((ayah, index) => (
-                    <article className="ayah" key={index}>
-                      <span className="ayah-number">{index + 1}</span>
-                      <p>{ayah}</p>
-                      <button className={isBookmarked(ayah) ? 'bookmark saved' : 'bookmark'} onClick={() => toggleBookmark(ayah)} aria-label="حفظ الآية">
-                        {isBookmarked(ayah) ? <Bookmark size={19} fill="currentColor" /> : <Bookmark size={19} />}
-                      </button>
-                    </article>
-                  ))}
+                  {isLoading ? (
+                    <div style={{ padding: '20px', textAlign: 'center', color: '#738096' }}>جارٍ تحميل الآيات...</div>
+                  ) : currentVerses.length > 0 ? (
+                    currentVerses.map((ayah, index) => (
+                      <article className="ayah" key={index}>
+                        <span className="ayah-number">{ayah.numberInSurah}</span>
+                        <p>{ayah.text}</p>
+                        <button className={isBookmarked(ayah.numberInSurah) ? 'bookmark saved' : 'bookmark'} onClick={() => toggleBookmark(ayah.numberInSurah, ayah.text)} aria-label="حفظ الآية">
+                          {isBookmarked(ayah.numberInSurah) ? <Bookmark size={19} fill="currentColor" /> : <Bookmark size={19} />}
+                        </button>
+                      </article>
+                    ))
+                  ) : (
+                    <div style={{ padding: '20px', textAlign: 'center', color: '#738096' }}>لم يتمكن من تحميل الآيات</div>
+                  )}
                 </div>
 
                 <div className="player">
@@ -181,12 +237,12 @@ function App() {
                     <div className="reader-avatar">{selectedReader.name[0]}</div>
                     <span><b>{selectedReader.name}</b><small>{selectedSurah.name}</small></span>
                   </div>
-                  <button className="play-button" onClick={play}>{isPlaying ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" />}</button>
+                  <button className="play-button" onClick={togglePlayback}>{isPlaying ? <Pause size={22} fill="currentColor" /> : <Play size={22} fill="currentColor" />}</button>
                   <div className="player-progress">
                     <div />
                     <small>التلاوة الصوتية</small>
                   </div>
-                  <audio ref={audioRef} src={selectedReader.audioUrl || undefined} onEnded={() => setIsPlaying(false)} />
+                  <audio ref={audioRef} onEnded={() => setIsPlaying(false)} onPause={() => setIsPlaying(false)} />
                 </div>
               </section>
             </div>
@@ -201,7 +257,6 @@ function App() {
                 <h2>القراء المميزون</h2>
               </div>
             </div>
-
             <div className="reader-cards">
               {readers.map((reader) => (
                 <article className="reader-card" key={reader.id}>
@@ -229,14 +284,13 @@ function App() {
                 <h2>المحفوظات</h2>
               </div>
             </div>
-
             {bookmarks.length ? (
               <div className="bookmark-grid">
                 {bookmarks.map((item, index) => (
-                  <article className="bookmark-card" key={`${item.surahId}-${item.ayah}-${index}`}>
+                  <article className="bookmark-card" key={`${item.surahId}-${item.ayahNum}-${index}`}>
                     <span>سورة {item.surah}</span>
-                    <p>{item.ayah}</p>
-                    <button onClick={() => toggleBookmark(item.ayah)}><X size={17} /> إزالة</button>
+                    <p>{item.ayahText}</p>
+                    <button onClick={() => toggleBookmark(item.ayahNum, item.ayahText)}><X size={17} /> إزالة</button>
                   </article>
                 ))}
               </div>
